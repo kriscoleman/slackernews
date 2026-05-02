@@ -68,7 +68,7 @@ replicated:
   image:
     registry: $REGISTRY
     repository: library/replicated-sdk-image
-    tag: 1.7.0
+    tag: 1.14.0
 
 images:
   pullSecrets:

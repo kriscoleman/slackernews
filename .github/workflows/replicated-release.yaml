@@ -1,0 +1,85 @@
+name: release-replicated
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (without v prefix, e.g. 1.2.3)'
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: slackernews-web
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v3
+        with:
+          version: "3.13.0"
+        id: helm
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update values.yaml with registry
+        uses: jacobtomlinson/gha-find-replace@v2
+        with:
+          include: "chart/slackernews/values.yaml"
+          find: "$REGISTRY"
+          replace: ${{ secrets.REPLICATED_PROXY_REGISTRY_CNAME || 'proxy.replicated.com' }}
+          regex: false
+
+      - name: Update values.yaml with image path
+        uses: jacobtomlinson/gha-find-replace@v2
+        with:
+          include: "chart/slackernews/values.yaml"
+          find: "$IMAGE"
+          replace: "proxy/${{ secrets.REPLICATED_APP }}/ghcr.io/${{ secrets.GHCR_NAMESPACE }}/slackernews-web"
+          regex: false
+
+      - name: Update values.yaml with version tag
+        uses: jacobtomlinson/gha-find-replace@v2
+        with:
+          include: "chart/slackernews/values.yaml"
+          find: "$TAG"
+          replace: ${{ steps.version.outputs.version }}
+          regex: false
+
+      - name: Package Helm chart
+        run: |
+          cd chart/slackernews
+          helm dep update
+          cd ..
+          helm package \
+            --app-version=${{ steps.version.outputs.version }} \
+            --version=${{ steps.version.outputs.version }} \
+            ./slackernews
+
+      - name: Prepare release bundle
+        run: |
+          mkdir -p release
+          cp chart/slackernews-${{ steps.version.outputs.version }}.tgz release/
+          cp chart/slackernews/replicated-app.yaml release/
+
+      - name: Create Replicated release
+        uses: replicatedhq/replicated-actions/create-release@v1
+        with:
+          app-slug: ${{ secrets.REPLICATED_APP }}
+          api-token: ${{ secrets.REPLICATED_TOKEN }}
+          yaml-dir: ./release
+          promote-channel: "Unstable"
+          version: ${{ steps.version.outputs.version }}
